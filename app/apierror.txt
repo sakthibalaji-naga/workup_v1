@@ -1,0 +1,6 @@
+2025-10-09 15:46:42 - API logging failed: Unknown column 'request_body' in 'field list'
+2025-10-09 15:51:35 - API logging failed: Unknown column 'request_body' in 'field list'
+2025-10-09 15:51:35 - API logging failed: Unknown column 'request_body' in 'field list'
+2025-10-09 15:51:36 - API logging failed: Unknown column 'request_body' in 'field list'
+2025-10-09 15:51:36 - API logging failed: Unknown column 'request_body' in 'field list'
+2025-10-09 15:54:28 - API logging failed: Unknown column 'request_body' in 'field list'

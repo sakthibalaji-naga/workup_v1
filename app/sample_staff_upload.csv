@@ -1,0 +1,4 @@
+firstname,lastname,email,emp_code,password,role,department,division,phone,active,reporting_manager,sub_department,send_welcome_email
+John,Doe,john.doe@example.com,EMP001,password123,Staff,IT,Development,+1234567890,1,EMP002,IT Department,1
+Jane,Smith,jane.smith@example.com,EMP002,password123,Manager,HR,Operations,+1234567891,1,,HR Department,0
+Bob,Johnson,bob.johnson@example.com,EMP003,password123,Staff,Finance,Accounting,+1234567892,1,EMP002,Finance Department,1

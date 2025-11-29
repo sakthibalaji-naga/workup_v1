@@ -156,10 +156,6 @@ function get_available_staff_permissions($data = [])
             'name'         => _l('estimate_request'),
             'capabilities' => $allPermissionsArray,
         ],
-        'internal_mail' => [
-            'name'         => _l('internal_mail'),
-            'capabilities' => $withoutViewOwnPermissionsArray,
-        ],
     ];
 
     $addLeadsPermission = true;

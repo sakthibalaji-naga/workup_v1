@@ -414,10 +414,20 @@ class Misc extends AdminController
 
     public function notifications_check()
     {
-        // Notifications check stopped
+        $notificationsIds = [];
+        if (get_option('desktop_notifications') == '1') {
+            $notifications = $this->misc_model->get_user_notifications();
+
+            $notificationsPluck = array_filter($notifications, function ($n) {
+                return $n['isread'] == 0;
+            });
+
+            $notificationsIds = array_pluck($notificationsPluck, 'id');
+        }
+
         echo json_encode([
-            'html'             => '',
-            'notificationsIds' => [],
+            'html'             => $this->load->view('admin/includes/notifications', [], true),
+            'notificationsIds' => $notificationsIds,
         ]);
     }
 

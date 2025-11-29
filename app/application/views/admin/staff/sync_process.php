@@ -42,7 +42,7 @@
                             <button type="submit" class="btn btn-primary mr-2 mb-2">
                                 <i class="fa fa-save mr-1"></i><?php echo _l('staff_sync_save_settings'); ?>
                             </button>
-                            <button type="button" class="btn btn-success mb-2" id="run-sync-btn" onclick="runZingHrSync(this, 'preview');">
+                            <button type="button" class="btn btn-success mb-2" id="run-sync-btn" onclick="runZingHrSync(this);">
                                 <i class="fa fa-play mr-1"></i><?php echo _l('staff_sync_run_now'); ?>
                             </button>
                         </div>
@@ -65,11 +65,6 @@
                         <div id="sync-result" class="bg-light border p-3 rounded">
                             <p class="text-muted mb-0"><?php echo _l('staff_sync_result_placeholder'); ?></p>
                         </div>
-                        <div class="text-right mt-3">
-                            <button type="button" class="btn btn-outline-primary btn-sm" onclick="runZingHrSync(this, 'preview');">
-                                <i class="fa fa-sync mr-1"></i><?php echo _l('staff_sync_run_now'); ?>
-                            </button>
-                        </div>
                     </div>
                 </div>
                 <div class="panel_s">
@@ -86,8 +81,7 @@
 </div>
 <?php init_tail(); ?>
 <script>
-function runZingHrSync(button, mode) {
-    mode = mode || 'preview';
+function runZingHrSync(button) {
     var $btn = $(button);
     var originalText = $btn.html();
     $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin mr-1"></i><?php echo _l('staff_sync_processing'); ?>');
@@ -96,14 +90,13 @@ function runZingHrSync(button, mode) {
         subscription_name: $('#subscription_name').val(),
         token: $('#token').val(),
         from_date: $('#from_date').val(),
-        to_date: $('#to_date').val(),
-        mode: mode
+        to_date: $('#to_date').val()
     };
 
     $.post(admin_url + 'staff/run_zinghr_sync', payload, function(response) {
         if (response && response.success) {
             alert_float('success', response.message || '<?php echo _l('staff_sync_run_completed'); ?>');
-            renderSyncResult(response.stats || {}, response.mode || mode);
+            renderSyncResult(response.stats || {});
         } else {
             var message = response && response.message ? response.message : '<?php echo _l('staff_sync_error_generic'); ?>';
             alert_float('danger', message);
@@ -115,7 +108,7 @@ function runZingHrSync(button, mode) {
     });
 }
 
-function renderSyncResult(stats, mode) {
+function renderSyncResult(stats) {
     if (!stats) {
         $('#sync-result').html('<p class="text-muted mb-0"><?php echo _l('staff_sync_result_placeholder'); ?></p>');
         return;
@@ -135,95 +128,17 @@ function renderSyncResult(stats, mode) {
                 <p class="mb-0"><strong><?php echo _l('staff_sync_result_staff_reactivated'); ?>:</strong> ${stats.staff_reactivated || 0}</p>
             </div>
         </div>
-        <hr>
     `;
 
-    template += buildListSection('<?php echo _l('staff_sync_section_divisions'); ?>', stats.divisions, function(item) {
-        return item.name;
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_departments_added'); ?>', stats.department_creations, function(item) {
-        var parent = item.parent_name ? ' — <?php echo _l('staff_sync_parent_label'); ?> ' + item.parent_name : '';
-        var division = item.division ? ' — <?php echo _l('staff_sync_division_label'); ?> ' + item.division : '';
-        return item.name + parent + division;
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_departments_updated'); ?>', stats.department_updates, function(item) {
-        return item.name + ' (<?php echo _l('staff_sync_parent_label'); ?>: ' + (item.old_parent || '-') + ' → ' + (item.new_parent || '-') + ')';
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_staff_created'); ?>', stats.staff_creations, function(item) {
-        return formatStaffLine(item);
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_staff_updated'); ?>', stats.staff_updates, function(item) {
-        var line = formatStaffLine(item);
-        if (item.changes && Object.keys(item.changes).length) {
-            line += '<br><span class="text-muted small">' + formatChangeSet(item.changes) + '</span>';
-        }
-        return line;
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_staff_inactivated'); ?>', stats.staff_inactivations, function(item) {
-        return formatStaffLine(item);
-    });
-
-    template += buildListSection('<?php echo _l('staff_sync_section_staff_reactivated'); ?>', stats.staff_reactivations, function(item) {
-        return formatStaffLine(item);
-    });
-
     if (stats.errors && stats.errors.length) {
-        template += '<div class="mt-3"><p class="text-danger mb-1"><strong><?php echo _l('staff_sync_result_errors'); ?>:</strong></p><ul class="text-danger small">';
+        template += '<hr><p class="text-danger mb-1"><strong><?php echo _l('staff_sync_result_errors'); ?>:</strong></p><ul class="text-danger small">';
         stats.errors.forEach(function(error) {
             template += '<li>' + error + '</li>';
         });
-        template += '</ul></div>';
-    }
-
-    if (mode === 'preview') {
-        template += `
-            <div class="mt-3">
-                <button type="button" class="btn btn-danger" onclick="runZingHrSync(this, 'execute');">
-                    <i class="fa fa-check mr-1"></i><?php echo _l('staff_sync_confirm_run'); ?>
-                </button>
-            </div>
-        `;
+        template += '</ul>';
     }
 
     $('#sync-result').html(template);
-}
-
-function buildListSection(title, items, formatter) {
-    if (!items || !items.length) {
-        return '';
-    }
-    var content = '<div class="mt-3"><p class="mb-1"><strong>' + title + '</strong></p><ul class="mb-0 small">';
-    items.forEach(function(item) {
-        content += '<li>' + formatter(item) + '</li>';
-    });
-    content += '</ul></div>';
-    return content;
-}
-
-function formatStaffLine(item) {
-    var parts = [];
-    parts.push('[' + (item.emp_code || '-') + '] ' + (item.name || ''));
-    if (item.department) {
-        parts.push('<?php echo _l('staff_sync_department_label'); ?> ' + item.department);
-    }
-    if (item.division) {
-        parts.push('<?php echo _l('staff_sync_division_label'); ?> ' + item.division);
-    }
-    return parts.join(' — ');
-}
-
-function formatChangeSet(changes) {
-    var parts = [];
-    Object.keys(changes).forEach(function(field) {
-        var change = changes[field];
-        parts.push(field + ': ' + (change.old || '—') + ' → ' + (change.new || '—'));
-    });
-    return parts.join(' | ');
 }
 </script>
 </body>

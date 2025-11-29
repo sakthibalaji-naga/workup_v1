@@ -6,12 +6,6 @@ class Zinghr_sync_model extends App_Model
 {
     private $endpoint = 'https://portal.zinghr.com/2015/route/EmployeeDetails/GetEmployeeMasterDetails';
     private $empCodeFieldId;
-    private $dryRun = false;
-    private $virtualIdSeed = -1;
-    private $divisionCache = [];
-    private $departmentCache = [];
-    private $virtualDivisionIds = [];
-    private $virtualDepartmentIds = [];
 
     public function __construct()
     {
@@ -22,40 +16,28 @@ class Zinghr_sync_model extends App_Model
 
     public function get_settings()
     {
-        $row = $this->get_settings_row();
+        $defaultFrom = date('Y-m-d', strtotime('-7 days'));
+        $defaultTo   = date('Y-m-d');
 
         return [
-            'subscription_name' => $row->subscription_name,
-            'token'             => $row->token,
-            'from_date'         => $row->from_date ?: date('Y-m-d', strtotime('-7 days')),
-            'to_date'           => $row->to_date ?: date('Y-m-d'),
-            'last_run'          => $row->last_run,
+            'subscription_name' => get_option('zinghr_subscription_name') ?: '',
+            'token'             => get_option('zinghr_token') ?: '',
+            'from_date'         => get_option('zinghr_from_date') ?: $defaultFrom,
+            'to_date'           => get_option('zinghr_to_date') ?: $defaultTo,
+            'last_run'          => get_option('zinghr_last_sync_at') ?: null,
         ];
     }
 
     public function save_settings($data)
     {
-        $row = $this->get_settings_row();
-        $payload = [
-            'subscription_name' => trim($data['subscription_name']),
-            'token'             => trim($data['token']),
-            'from_date'         => $this->normalize_date_input($data['from_date'] ?? null),
-            'to_date'           => $this->normalize_date_input($data['to_date'] ?? null),
-            'updated_at'        => date('Y-m-d H:i:s'),
-        ];
-
-        $this->db->where('id', $row->id)->update('tblzinghr_settings', $payload);
+        update_option('zinghr_subscription_name', trim($data['subscription_name']));
+        update_option('zinghr_token', trim($data['token']));
+        update_option('zinghr_from_date', $this->normalize_date_input($data['from_date']));
+        update_option('zinghr_to_date', $this->normalize_date_input($data['to_date']));
     }
 
-    public function sync($params, $options = [])
+    public function sync($params)
     {
-        $this->dryRun               = !empty($options['dry_run']);
-        $this->virtualIdSeed        = -1;
-        $this->divisionCache        = [];
-        $this->departmentCache      = [];
-        $this->virtualDivisionIds   = [];
-        $this->virtualDepartmentIds = [];
-
         $subscription = trim($params['subscription_name'] ?? '');
         $token        = trim($params['token'] ?? '');
 
@@ -81,7 +63,16 @@ class Zinghr_sync_model extends App_Model
         $hasMore   = true;
         $processed = 0;
 
-        $stats = $this->initialize_stats();
+        $stats = [
+            'divisions_created'   => 0,
+            'departments_created' => 0,
+            'departments_updated' => 0,
+            'staff_created'       => 0,
+            'staff_updated'       => 0,
+            'staff_inactivated'   => 0,
+            'staff_reactivated'   => 0,
+            'errors'              => [],
+        ];
 
         while ($hasMore) {
             $payload = [
@@ -116,18 +107,14 @@ class Zinghr_sync_model extends App_Model
             }
         }
 
-        if (!$this->dryRun) {
-            $this->mark_last_run($fromDate, $toDate);
-        }
-
-        $mode = $this->dryRun ? 'preview' : 'execute';
-        $this->dryRun = false;
+        update_option('zinghr_last_sync_at', date('Y-m-d H:i:s'));
+        update_option('zinghr_from_date', $fromDate);
+        update_option('zinghr_to_date', $toDate);
 
         return [
             'success' => true,
-            'message' => $mode === 'preview' ? _l('staff_sync_preview_ready') : _l('staff_sync_run_completed'),
+            'message' => _l('staff_sync_run_completed'),
             'stats'   => $stats,
-            'mode'    => $mode,
         ];
     }
 
@@ -135,20 +122,14 @@ class Zinghr_sync_model extends App_Model
     {
         $attributes = isset($employee['Attributes']) && is_array($employee['Attributes']) ? $employee['Attributes'] : [];
 
-        $divisionName     = $this->extract_attribute_value($attributes, 'Division');
-        $parentDepartment = $this->extract_attribute_value($attributes, 'Department');
-        $childDepartment  = $this->extract_attribute_value($attributes, 'Sub-Department');
-        $targetDepartment = $childDepartment ?: $parentDepartment;
+        $divisionName      = $this->extract_attribute_value($attributes, 'Division');
+        $parentDepartment  = $this->extract_attribute_value($attributes, 'Department');
+        $childDepartment   = $this->extract_attribute_value($attributes, 'Sub-Department');
 
         $divisionId = $this->sync_division($divisionName, $stats);
         $departmentId = $this->sync_department_hierarchy($parentDepartment, $childDepartment, $divisionId, $stats);
 
-        $this->sync_staff_record($employee, [
-            'division_id'     => $divisionId,
-            'division_name'   => $divisionName,
-            'department_id'   => $departmentId,
-            'department_name' => $targetDepartment,
-        ], $stats);
+        $this->sync_staff_record($employee, $divisionId, $departmentId, $stats);
     }
 
     private function sync_division($divisionName, array &$stats)
@@ -157,31 +138,15 @@ class Zinghr_sync_model extends App_Model
             return null;
         }
 
-        if (isset($this->divisionCache[$divisionName])) {
-            return $this->divisionCache[$divisionName];
-        }
-
         $row = $this->db->where('name', $divisionName)->get('tbldivisions')->row();
         if ($row) {
-            $this->divisionCache[$divisionName] = (int) $row->divisionid;
             return (int) $row->divisionid;
         }
 
-        $stats['divisions_created']++;
-        $stats['divisions'][] = ['name' => $divisionName];
-
-        if ($this->dryRun) {
-            $virtualId = $this->generate_virtual_id();
-            $this->divisionCache[$divisionName]      = $virtualId;
-            $this->virtualDivisionIds[$divisionName] = $virtualId;
-            return $virtualId;
-        }
-
         $this->db->insert('tbldivisions', ['name' => $divisionName]);
-        $divisionId = (int) $this->db->insert_id();
-        $this->divisionCache[$divisionName] = $divisionId;
+        $stats['divisions_created']++;
 
-        return $divisionId;
+        return (int) $this->db->insert_id();
     }
 
     private function sync_department_hierarchy($parentName, $childName, $divisionId, array &$stats)
@@ -201,39 +166,21 @@ class Zinghr_sync_model extends App_Model
 
     private function ensure_department($name, $parentId, $divisionId, array &$stats)
     {
-        if (isset($this->departmentCache[$name])) {
-            return $this->departmentCache[$name];
-        }
-
         $dept = $this->db->where('name', $name)->get(db_prefix() . 'departments')->row();
 
         if (!$dept) {
-            $stats['departments_created']++;
-            $stats['department_creations'][] = [
-                'name'         => $name,
-                'parent_name'  => $this->lookup_department_name($parentId),
-                'division'     => $this->lookup_division_name($divisionId),
-            ];
-
-            if ($this->dryRun) {
-                $virtualId = $this->generate_virtual_id();
-                $this->departmentCache[$name]      = $virtualId;
-                $this->virtualDepartmentIds[$name] = $virtualId;
-                return $virtualId;
-            }
-
             $data = [
-                'name'               => $name,
-                'imap_username'      => null,
-                'email'              => null,
-                'email_from_header'  => 0,
-                'host'               => null,
-                'password'           => null,
-                'encryption'         => '',
-                'folder'             => 'INBOX',
-                'delete_after_import'=> 0,
-                'calendar_id'        => null,
-                'hidefromclient'     => 1,
+                'name'              => $name,
+                'imap_username'     => null,
+                'email'             => null,
+                'email_from_header' => 0,
+                'host'              => null,
+                'password'          => null,
+                'encryption'        => '',
+                'folder'            => 'INBOX',
+                'delete_after_import' => 0,
+                'calendar_id'       => null,
+                'hidefromclient'    => 1,
             ];
 
             if ($this->db->field_exists('parent_department', db_prefix() . 'departments')) {
@@ -242,30 +189,20 @@ class Zinghr_sync_model extends App_Model
 
             $this->db->insert(db_prefix() . 'departments', $data);
             $deptId = (int) $this->db->insert_id();
-            $this->departmentCache[$name] = $deptId;
+            $stats['departments_created']++;
         } else {
             $deptId = (int) $dept->departmentid;
-            $this->departmentCache[$name] = $deptId;
-
             if ($parentId && $this->db->field_exists('parent_department', db_prefix() . 'departments')) {
                 if ((int) $dept->parent_department !== (int) $parentId) {
+                    $this->db->where('departmentid', $deptId)->update(db_prefix() . 'departments', ['parent_department' => $parentId]);
                     $stats['departments_updated']++;
-                    $stats['department_updates'][] = [
-                        'name'       => $name,
-                        'old_parent' => $this->lookup_department_name($dept->parent_department),
-                        'new_parent' => $this->lookup_department_name($parentId),
-                    ];
-
-                    if (!$this->dryRun) {
-                        $this->db->where('departmentid', $deptId)->update(db_prefix() . 'departments', ['parent_department' => $parentId]);
-                    }
                 }
             }
         }
 
-        if ($divisionId && is_int($deptId)) {
+        if ($divisionId) {
             $exists = $this->db->where('departmentid', $deptId)->where('divisionid', $divisionId)->get(db_prefix() . 'department_divisions')->row();
-            if (!$exists && !$this->dryRun) {
+            if (!$exists) {
                 $this->db->insert(db_prefix() . 'department_divisions', [
                     'departmentid' => $deptId,
                     'divisionid'   => $divisionId,
@@ -276,7 +213,7 @@ class Zinghr_sync_model extends App_Model
         return $deptId;
     }
 
-    private function sync_staff_record(array $employee, array $context, array &$stats)
+    private function sync_staff_record(array $employee, $divisionId, $departmentId, array &$stats)
     {
         $empCode = trim($employee['EmployeeCode'] ?? '');
         if ($empCode === '') {
@@ -306,8 +243,8 @@ class Zinghr_sync_model extends App_Model
             'active'      => $isActive ? 1 : 0,
         ];
 
-        if (isset($context['division_id']) && $context['division_id'] && $this->db->field_exists('divisionid', db_prefix() . 'staff')) {
-            $baseData['divisionid'] = $context['division_id'];
+        if ($divisionId && $this->db->field_exists('divisionid', db_prefix() . 'staff')) {
+            $baseData['divisionid'] = $divisionId;
         }
 
         $managerId = null;
@@ -322,70 +259,48 @@ class Zinghr_sync_model extends App_Model
             $baseData['reporting_manager'] = $managerId;
         }
 
-        $staffLabel = trim($firstName . ' ' . $lastName);
-        $staffLabel = $staffLabel !== '' ? $staffLabel : $empCode;
-
         if (!$current) {
-            if ($this->dryRun) {
-                $stats['staff_created']++;
-                $stats['staff_creations'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context);
-                return;
-            }
-
-            $baseData['password']    = $this->generate_password();
-            $baseData['departments'] = isset($context['department_id']) && $context['department_id'] ? [$context['department_id']] : [];
-
+            $baseData['password'] = $this->generate_password();
+            $baseData['departments'] = $departmentId ? [$departmentId] : [];
             $staffId = $this->staff_model->add($baseData);
             if ($staffId) {
                 $stats['staff_created']++;
-                $stats['staff_creations'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context);
                 $this->save_emp_code($staffId, $empCode);
-                $this->assign_department($staffId, $context['department_id'] ?? null);
+                $this->assign_department($staffId, $departmentId);
             } else {
                 $stats['errors'][] = _l('staff_sync_error_create', $empCode);
             }
             return;
         }
 
-        [$needsUpdate, $changes] = $this->get_staff_changes($current, $baseData);
+        $staffId = (int) $current->staffid;
+        $needsUpdate = $this->needs_staff_update($current, $baseData);
 
         if ($needsUpdate) {
-            if ($this->dryRun) {
+            $result = $this->staff_model->update($baseData, $staffId);
+            if ($result) {
                 $stats['staff_updated']++;
-                $stats['staff_updates'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context, $changes);
-            } else {
-                $result = $this->staff_model->update($baseData, $current->staffid);
-                if ($result) {
-                    $stats['staff_updated']++;
-                    $stats['staff_updates'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context, $changes);
-                }
+            }
+        } else {
+            // Even if no other data changed, still update status manually if staff_model skipped due to empty update
+            if (isset($baseData['active']) && (int) $current->active !== (int) $baseData['active']) {
+                $this->db->where('staffid', $staffId)->update(db_prefix() . 'staff', ['active' => (int) $baseData['active']]);
             }
         }
 
-        $statusChanged = false;
         if ($current->active == 1 && !$isActive) {
             $stats['staff_inactivated']++;
-            $stats['staff_inactivations'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context);
-            $statusChanged = true;
         } elseif ($current->active == 0 && $isActive) {
             $stats['staff_reactivated']++;
-            $stats['staff_reactivations'][] = $this->format_staff_log($empCode, $staffLabel, $email, $context);
-            $statusChanged = true;
         }
 
-        if ($statusChanged && !$this->dryRun) {
-            $this->db->where('staffid', $current->staffid)->update(db_prefix() . 'staff', ['active' => $baseData['active']]);
-        }
-
-        if (!$this->dryRun) {
-            $this->assign_department($current->staffid, $context['department_id'] ?? null);
-            $this->save_emp_code($current->staffid, $empCode);
-        }
+        $this->assign_department($staffId, $departmentId);
+        $this->save_emp_code($staffId, $empCode);
     }
 
     private function assign_department($staffId, $departmentId)
     {
-        if (!$staffId || !$departmentId || $this->dryRun) {
+        if (!$staffId || !$departmentId) {
             return;
         }
         $exists = $this->db->where('staffid', $staffId)->where('departmentid', $departmentId)->get(db_prefix() . 'staff_departments')->row();
@@ -414,7 +329,7 @@ class Zinghr_sync_model extends App_Model
 
     private function save_emp_code($staffId, $empCode)
     {
-        if (!$staffId || !$empCode || $this->dryRun) {
+        if (!$staffId || !$empCode) {
             return;
         }
         $fieldId = $this->get_emp_code_field_id();
@@ -437,9 +352,8 @@ class Zinghr_sync_model extends App_Model
         }
     }
 
-    private function get_staff_changes($current, array $data)
+    private function needs_staff_update($current, array $data)
     {
-        $changes = [];
         foreach ($data as $key => $value) {
             if ($key === 'password' || $key === 'departments') {
                 continue;
@@ -448,14 +362,11 @@ class Zinghr_sync_model extends App_Model
                 continue;
             }
             if ((string) $current->$key !== (string) $value) {
-                $changes[$key] = [
-                    'old' => (string) $current->$key,
-                    'new' => (string) $value,
-                ];
+                return true;
             }
         }
 
-        return [count($changes) > 0, $changes];
+        return false;
     }
 
     private function determine_active_status(array $employee)
@@ -615,118 +526,5 @@ class Zinghr_sync_model extends App_Model
         if (!$this->db->field_exists('parent_department', db_prefix() . 'departments')) {
             $this->db->query('ALTER TABLE `' . db_prefix() . 'departments` ADD `parent_department` INT(11) NULL DEFAULT NULL AFTER `delete_after_import`;');
         }
-
-        if (!$this->db->table_exists('tblzinghr_settings')) {
-            $this->db->query('CREATE TABLE `tblzinghr_settings` (
-                `id` INT(11) UNSIGNED NOT NULL AUTO_INCREMENT,
-                `subscription_name` VARCHAR(50) DEFAULT NULL,
-                `token` TEXT,
-                `from_date` DATE DEFAULT NULL,
-                `to_date` DATE DEFAULT NULL,
-                `last_run` DATETIME DEFAULT NULL,
-                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (`id`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8;');
-        }
-    }
-
-    private function get_settings_row()
-    {
-        $row = $this->db->limit(1)->get('tblzinghr_settings')->row();
-        if ($row) {
-            return $row;
-        }
-
-        $record = [
-            'subscription_name' => '',
-            'token'             => '',
-            'from_date'         => date('Y-m-d', strtotime('-7 days')),
-            'to_date'           => date('Y-m-d'),
-            'last_run'          => null,
-            'created_at'        => date('Y-m-d H:i:s'),
-            'updated_at'        => date('Y-m-d H:i:s'),
-        ];
-        $this->db->insert('tblzinghr_settings', $record);
-        $record['id'] = $this->db->insert_id();
-
-        return (object) $record;
-    }
-
-    private function mark_last_run($fromDate, $toDate)
-    {
-        $row = $this->get_settings_row();
-        $this->db->where('id', $row->id)->update('tblzinghr_settings', [
-            'last_run'  => date('Y-m-d H:i:s'),
-            'from_date' => $fromDate,
-            'to_date'   => $toDate,
-            'updated_at'=> date('Y-m-d H:i:s'),
-        ]);
-    }
-
-    private function initialize_stats()
-    {
-        return [
-            'divisions_created'    => 0,
-            'divisions'            => [],
-            'departments_created'  => 0,
-            'department_creations' => [],
-            'departments_updated'  => 0,
-            'department_updates'   => [],
-            'staff_created'        => 0,
-            'staff_creations'      => [],
-            'staff_updated'        => 0,
-            'staff_updates'        => [],
-            'staff_inactivated'    => 0,
-            'staff_inactivations'  => [],
-            'staff_reactivated'    => 0,
-            'staff_reactivations'  => [],
-            'errors'               => [],
-        ];
-    }
-
-    private function format_staff_log($empCode, $name, $email, array $context, $changes = [])
-    {
-        return [
-            'emp_code'        => $empCode,
-            'name'            => $name,
-            'email'           => $email,
-            'division'        => $context['division_name'] ?? '',
-            'department'      => $context['department_name'] ?? '',
-            'changes'         => $changes,
-        ];
-    }
-
-    private function lookup_department_name($departmentId)
-    {
-        if (!$departmentId) {
-            return null;
-        }
-        foreach ($this->departmentCache as $name => $id) {
-            if ((int) $id === (int) $departmentId) {
-                return $name;
-            }
-        }
-        $row = $this->db->select('name')->where('departmentid', $departmentId)->get(db_prefix() . 'departments')->row();
-        return $row ? $row->name : null;
-    }
-
-    private function lookup_division_name($divisionId)
-    {
-        if (!$divisionId) {
-            return null;
-        }
-        foreach ($this->divisionCache as $name => $id) {
-            if ((int) $id === (int) $divisionId) {
-                return $name;
-            }
-        }
-        $row = $this->db->select('name')->where('divisionid', $divisionId)->get('tbldivisions')->row();
-        return $row ? $row->name : null;
-    }
-
-    private function generate_virtual_id()
-    {
-        return $this->virtualIdSeed--;
     }
 }

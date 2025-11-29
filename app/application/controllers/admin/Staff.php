@@ -69,8 +69,6 @@ class Staff extends AdminController
         $this->load->model('zinghr_sync_model');
         $settings = $this->zinghr_sync_model->get_settings();
 
-        $mode = $this->input->post('mode', true) ?: 'preview';
-
         $payload = [
             'subscription_name' => $this->input->post('subscription_name', true) ?: $settings['subscription_name'],
             'token'             => $this->input->post('token', true) ?: $settings['token'],
@@ -78,7 +76,7 @@ class Staff extends AdminController
             'to_date'           => $this->input->post('to_date', true) ?: $settings['to_date'],
         ];
 
-        $result = $this->zinghr_sync_model->sync($payload, ['dry_run' => ($mode !== 'execute')]);
+        $result = $this->zinghr_sync_model->sync($payload);
 
         $this->output
             ->set_content_type('application/json')

@@ -1,0 +1,11 @@
+name,division,parent_department
+IT Department,IT Division,
+HR Department,HR Division,
+Finance Department,Finance Division,
+Operations Department,Operations Division,IT Department
+Marketing Department,Marketing Division,
+Sales Department,Sales Division,Marketing Department
+Legal Department,Legal Division,
+Quality Assurance Department,Quality Assurance Division,IT Department
+Research & Development Department,Research & Development Division,
+Customer Support Department,Customer Support Division,

@@ -4147,11 +4147,12 @@ function saveNodeConfiguration() {
         case 'staff_create':
         case 'staff_update':
             config = {
-                <?php if (isset($flow_id) && $nodeType === 'staff_update'): ?>
-                staff_id_field: document.getElementById('staff-id-field').value,
-                <?php endif; ?>
                 mapping: []
             };
+            if (nodeType === 'staff_update') {
+                const staffIdInput = document.getElementById('staff-id-field');
+                config.staff_id_field = staffIdInput ? staffIdInput.value : '';
+            }
             document.querySelectorAll('.mapping-row').forEach(row => {
                 const sourceSelect = row.querySelector('.mapping-source');
                 const targetSelect = row.querySelector('.mapping-target');
