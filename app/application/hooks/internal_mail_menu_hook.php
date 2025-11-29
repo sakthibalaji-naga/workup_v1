@@ -11,11 +11,11 @@ defined('BASEPATH') or exit('No direct script access allowed');
  * Register internal mail menu
  * Hook: admin_init
  */
-hooks()-&gt;add_action('admin_init', 'internal_mail_add_menu_items');
+hooks()->add_action('admin_init', 'internal_mail_add_menu_items');
 
 function internal_mail_add_menu_items()
 {
-    $CI = &amp;get_instance();
+    $CI = &get_instance();
     
     if (is_staff_logged_in()) {
         // Load the model to get unread count
@@ -44,36 +44,34 @@ function internal_mail_add_menu_items()
         
         // Add submenu items
         $menu_item['children'] = [];
-        
-        if (staff_can('view', 'internal_mail')) {
-            $menu_item['children'][] = [
-                'slug' => 'internal-mail-inbox',
-                'name' => 'internal_mail_inbox',
-                'icon' => 'fa fa-inbox',
-                'href' => admin_url('internal_mail/inbox'),
-            ];
-            
-            $menu_item['children'][] = [
-                'slug' => 'internal-mail-sent',
-                'name' => 'internal_mail_sent',
-                'icon' => 'fa fa-paper-plane',
-                'href' => admin_url('internal_mail/sent'),
-            ];
-            
-            $menu_item['children'][] = [
-                'slug' => 'internal-mail-drafts',
-                'name' => 'internal_mail_drafts',
-                'icon' => 'fa fa-file-text',
-                'href' => admin_url('internal_mail/drafts'),
-            ];
-            
-            $menu_item['children'][] = [
-                'slug' => 'internal-mail-trash',
-                'name' => 'internal_mail_trash',
-                'icon' => 'fa fa-trash',
-                'href' => admin_url('internal_mail/trash'),
-            ];
-        }
+
+        $menu_item['children'][] = [
+            'slug' => 'internal-mail-inbox',
+            'name' => 'internal_mail_inbox',
+            'icon' => 'fa fa-inbox',
+            'href' => admin_url('internal_mail/inbox'),
+        ];
+
+        $menu_item['children'][] = [
+            'slug' => 'internal-mail-sent',
+            'name' => 'internal_mail_sent',
+            'icon' => 'fa fa-paper-plane',
+            'href' => admin_url('internal_mail/sent'),
+        ];
+
+        $menu_item['children'][] = [
+            'slug' => 'internal-mail-drafts',
+            'name' => 'internal_mail_drafts',
+            'icon' => 'fa fa-file-text',
+            'href' => admin_url('internal_mail/drafts'),
+        ];
+
+        $menu_item['children'][] = [
+            'slug' => 'internal-mail-trash',
+            'name' => 'internal_mail_trash',
+            'icon' => 'fa fa-trash',
+            'href' => admin_url('internal_mail/trash'),
+        ];
         
         // Add to sidebar menu
         add_sidebar_menu_item('internal_mail', $menu_item);
@@ -87,7 +85,7 @@ function internal_mail_add_menu_items()
 if (!function_exists('add_sidebar_menu_item')) {
     function add_sidebar_menu_item($key, $item)
     {
-        hooks()-&gt;add_filter('get_sidebar_menu_items', function($items) use ($key, $item) {
+        hooks()->add_filter('sidebar_menu_items', function($items) use ($key, $item) {
             $items[$key] = $item;
             return $items;
         });
